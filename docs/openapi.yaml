@@ -1,0 +1,905 @@
+openapi: 3.0.3
+info:
+  title: Class Waitlist SMS Notification Job (Twilio Mock) API
+  description: >-
+    Enterprise RESTful API for managing course capacities, FIFO waitlists,
+    automated seat release allocations, and simulated Twilio SMS notifications.
+    Associated Ticket: ENG-135180 (Epic: Core Infrastructure Overhaul).
+  version: 1.0.0
+  contact:
+    name: Core Architecture Team
+    email: architecture@university.edu
+servers:
+  - url: /api
+    description: Primary API Gateway Base URL
+
+paths:
+  /classes:
+    get:
+      summary: List all classes
+      description: Retrieve catalog of classes with calculated real-time capacity and waitlist counts.
+      tags:
+        - Classes
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, OPEN, FULL, CANCELLED, COMPLETED]
+        - name: search
+          in: query
+          description: Search by course code, title, or instructor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved classes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassListResponse'
+
+    post:
+      summary: Create a new class
+      description: Register a new academic course section with seating capacity limits.
+      tags:
+        - Classes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateClassRequest'
+      responses:
+        '201':
+          description: Class created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSingleResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /classes/{classId}:
+    get:
+      summary: Get class details
+      description: Retrieve comprehensive details, capacity counts, and schedule for a single course section.
+      tags:
+        - Classes
+      parameters:
+        - $ref: '#/components/parameters/ClassIdParam'
+      responses:
+        '200':
+          description: Successfully retrieved class
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSingleResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+    put:
+      summary: Update class details
+      description: Modify course section schedule, classroom, or capacity thresholds.
+      tags:
+        - Classes
+      parameters:
+        - $ref: '#/components/parameters/ClassIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateClassRequest'
+      responses:
+        '200':
+          description: Class updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSingleResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /classes/{classId}/seats/release:
+    post:
+      summary: Release seats & trigger waitlist allocation
+      description: >-
+        Administrative action to declare seats vacant, select the next candidate in line (FIFO),
+        reserve the seat for 24h, and dispatch simulated SMS notification.
+      tags:
+        - Seat Allocation
+      parameters:
+        - $ref: '#/components/parameters/ClassIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseSeatRequest'
+      responses:
+        '200':
+          description: Seat released and waitlist candidate notified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeatReleaseResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /classes/{classId}/waitlist:
+    get:
+      summary: Get active waitlist queue
+      description: Retrieve ordered FIFO list of students waiting for a full class.
+      tags:
+        - Waitlist
+      parameters:
+        - $ref: '#/components/parameters/ClassIdParam'
+      responses:
+        '200':
+          description: Successfully retrieved waitlist queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaitlistQueueResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+    post:
+      summary: Join class waitlist
+      description: Add an eligible student to the waitlist queue for an oversubscribed class.
+      tags:
+        - Waitlist
+      parameters:
+        - $ref: '#/components/parameters/ClassIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinWaitlistRequest'
+      responses:
+        '201':
+          description: Successfully joined waitlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaitlistEntryResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /waitlist/{waitlistId}:
+    get:
+      summary: Get waitlist entry details
+      description: Retrieve status, queue position, offer deadlines, and notification history for a waitlist entry.
+      tags:
+        - Waitlist
+      parameters:
+        - $ref: '#/components/parameters/WaitlistIdParam'
+      responses:
+        '200':
+          description: Successfully retrieved waitlist entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaitlistEntryDetailResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+    delete:
+      summary: Withdraw from waitlist
+      description: Voluntarily withdraw from waitlist and trigger atomic queue shift for subsequent students.
+      tags:
+        - Waitlist
+      parameters:
+        - $ref: '#/components/parameters/WaitlistIdParam'
+      responses:
+        '200':
+          description: Successfully withdrawn from waitlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawWaitlistResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /waitlist/{waitlistId}/confirm:
+    post:
+      summary: Confirm seat offer & enroll
+      description: Two-phase booking confirmation converting an OFFERED waitlist entry into an active enrollment.
+      tags:
+        - Waitlist
+      parameters:
+        - $ref: '#/components/parameters/WaitlistIdParam'
+      responses:
+        '200':
+          description: Offer successfully confirmed and student enrolled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmOfferResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '410':
+          description: Offer has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /waitlist/{waitlistId}/notifications:
+    post:
+      summary: Dispatch simulated SMS notification
+      description: Trigger or re-send simulated Twilio SMS offer notification to the waitlisted student.
+      tags:
+        - Notifications
+      parameters:
+        - $ref: '#/components/parameters/WaitlistIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      responses:
+        '200':
+          description: Notification dispatched via mock service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationSingleResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /students:
+    get:
+      summary: List students
+      description: Query student directory with pagination and search filters.
+      tags:
+        - Students
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved students
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentListResponse'
+
+    post:
+      summary: Register new student
+      description: Create a student record with international E.164 phone validation.
+      tags:
+        - Students
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStudentRequest'
+      responses:
+        '201':
+          description: Student registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentSingleResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /students/{studentId}:
+    get:
+      summary: Get student details
+      description: Retrieve student profile with current course enrollments and active waitlist entries.
+      tags:
+        - Students
+      parameters:
+        - $ref: '#/components/parameters/StudentIdParam'
+      responses:
+        '200':
+          description: Successfully retrieved student
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentSingleResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /notifications:
+    get:
+      summary: List simulated SMS notifications
+      description: Query audit log of simulated SMS dispatches.
+      tags:
+        - Notifications
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, SENT, FAILED]
+        - name: waitlistEntryId
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successfully retrieved notifications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponse'
+
+  /notifications/{notificationId}/retry:
+    post:
+      summary: Retry failed SMS notification
+      description: Safely re-attempt a failed simulated SMS notification with attempt counter increment.
+      tags:
+        - Notifications
+      parameters:
+        - $ref: '#/components/parameters/NotificationIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      responses:
+        '200':
+          description: Retry executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationSingleResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '422':
+          description: Maximum retry threshold exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ClassIdParam:
+      name: classId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    StudentIdParam:
+      name: studentId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    WaitlistIdParam:
+      name: waitlistId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    NotificationIdParam:
+      name: notificationId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Cryptographic hash or UUID preventing duplicate execution
+      schema:
+        type: string
+
+  responses:
+    400BadRequest:
+      description: Invalid request payload or business constraint violation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    404NotFound:
+      description: Requested resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    409Conflict:
+      description: Resource conflict or duplicate entry
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+        - timestamp
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              example: DUPLICATE_WAITLIST_ENTRY
+            message:
+              type: string
+              example: Student is already actively waitlisted for this class.
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+
+    CreateClassRequest:
+      type: object
+      required:
+        - classCode
+        - title
+        - instructor
+        - classroom
+        - startDate
+        - endDate
+        - startTime
+        - endTime
+        - maxCapacity
+      properties:
+        classCode:
+          type: string
+          example: CS-101
+        title:
+          type: string
+          example: Introduction to Computer Science
+        description:
+          type: string
+        instructor:
+          type: string
+          example: Dr. Alan Turing
+        classroom:
+          type: string
+          example: Hall A-101
+        startDate:
+          type: string
+          format: date
+          example: "2027-01-15"
+        endDate:
+          type: string
+          format: date
+          example: "2027-05-20"
+        startTime:
+          type: string
+          example: "09:00:00"
+        endTime:
+          type: string
+          example: "10:30:00"
+        maxCapacity:
+          type: integer
+          minimum: 1
+          example: 30
+        offerTimeoutHours:
+          type: integer
+          default: 24
+
+    UpdateClassRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        instructor:
+          type: string
+        classroom:
+          type: string
+        maxCapacity:
+          type: integer
+        status:
+          type: string
+          enum: [DRAFT, OPEN, FULL, CANCELLED, COMPLETED]
+
+    ClassModel:
+      type: object
+      properties:
+        id:
+          type: integer
+        classCode:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        instructor:
+          type: string
+        classroom:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        startTime:
+          type: string
+        endTime:
+          type: string
+        maxCapacity:
+          type: integer
+        enrolledCount:
+          type: integer
+        reservedCount:
+          type: integer
+        availableSeats:
+          type: integer
+        waitlistedCount:
+          type: integer
+        status:
+          type: string
+        offerTimeoutHours:
+          type: integer
+
+    ClassSingleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/ClassModel'
+
+    ClassListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClassModel'
+        pagination:
+          $ref: '#/components/schemas/PaginationModel'
+
+    CreateStudentRequest:
+      type: object
+      required:
+        - firstName
+        - lastName
+        - email
+        - phone
+      properties:
+        firstName:
+          type: string
+          example: David
+        lastName:
+          type: string
+          example: Kumar
+        email:
+          type: string
+          format: email
+          example: david.kumar@university.edu
+        phone:
+          type: string
+          pattern: '^\+[1-9]\d{1,14}$'
+          example: "+15005550006"
+
+    StudentModel:
+      type: object
+      properties:
+        id:
+          type: integer
+        studentUuid:
+          type: string
+          format: uuid
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        status:
+          type: string
+
+    StudentSingleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/StudentModel'
+
+    StudentListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentModel'
+        pagination:
+          $ref: '#/components/schemas/PaginationModel'
+
+    JoinWaitlistRequest:
+      type: object
+      required:
+        - studentId
+      properties:
+        studentId:
+          type: integer
+          example: 4
+
+    WaitlistEntryModel:
+      type: object
+      properties:
+        waitlistId:
+          type: integer
+        classId:
+          type: integer
+        classCode:
+          type: string
+        studentId:
+          type: integer
+        studentName:
+          type: string
+        position:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [WAITING, OFFERED, CONVERTED, EXPIRED, WITHDRAWN, CANCELLED]
+        offeredAt:
+          type: string
+          format: date-time
+          nullable: true
+        offerExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    WaitlistEntryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/WaitlistEntryModel'
+
+    WaitlistEntryDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          allOf:
+            - $ref: '#/components/schemas/WaitlistEntryModel'
+            - type: object
+              properties:
+                notifications:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/NotificationModel'
+
+    WaitlistQueueResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WaitlistEntryModel'
+        totalWaitlisted:
+          type: integer
+
+    WithdrawWaitlistResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            waitlistId:
+              type: integer
+            status:
+              type: string
+            vacatedPosition:
+              type: integer
+            subsequentEntriesShifted:
+              type: integer
+
+    ConfirmOfferResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            waitlistId:
+              type: integer
+            status:
+              type: string
+            enrollmentId:
+              type: integer
+            classId:
+              type: integer
+            studentId:
+              type: integer
+            confirmedAt:
+              type: string
+              format: date-time
+
+    ReleaseSeatRequest:
+      type: object
+      required:
+        - seatsToRelease
+        - reason
+      properties:
+        seatsToRelease:
+          type: integer
+          minimum: 1
+          default: 1
+        reason:
+          type: string
+          enum: [ENROLLMENT_DROPPED, CAPACITY_EXPANDED, OFFER_EXPIRED, MANUAL_RELEASE]
+        notes:
+          type: string
+
+    SeatReleaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            seatReleaseEventId:
+              type: integer
+            seatsReleased:
+              type: integer
+            candidatePromoted:
+              $ref: '#/components/schemas/WaitlistEntryModel'
+            notification:
+              $ref: '#/components/schemas/NotificationModel'
+
+    NotificationModel:
+      type: object
+      properties:
+        id:
+          type: integer
+        notificationUuid:
+          type: string
+        waitlistEntryId:
+          type: integer
+        recipientPhone:
+          type: string
+        messageBody:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, SENT, FAILED]
+        attemptNumber:
+          type: integer
+        mockMessageSid:
+          type: string
+          nullable: true
+        errorCode:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    NotificationSingleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/NotificationModel'
+
+    NotificationListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationModel'
+        pagination:
+          $ref: '#/components/schemas/PaginationModel'
+
+    PaginationModel:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalRecords:
+          type: integer
+        totalPages:
+          type: integer
